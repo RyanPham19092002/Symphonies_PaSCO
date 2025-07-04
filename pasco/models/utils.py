@@ -305,13 +305,26 @@ def save_checkpoint(state, is_best, checkpoint_dir):
 
     if not os.path.exists(checkpoint_dir):
         os.mkdir(checkpoint_dir)
+    print(f"==========Saving at {checkpoint_dir}=============")
 
-    last_file_path = os.path.join(checkpoint_dir, "last_checkpoint.pytorch")
+    os.makedirs(os.path.join(checkpoint_dir,"pytorch"), exist_ok=True)
+
+    os.makedirs(os.path.join(checkpoint_dir,"ckpt"), exist_ok=True)
+    
+    pytorch_dir = os.path.join(checkpoint_dir, "pytorch")
+    ckpt_dir = os.path.join(checkpoint_dir, "ckpt")
+    
+    last_file_path = os.path.join(pytorch_dir, "last_checkpoint.pytorch")
+    last_ckpt_path = os.path.join(ckpt_dir, "last_checkpoint.ckpt")
     torch.save(state, last_file_path)
+    torch.save(state, last_ckpt_path)
     if is_best:
-        best_file_path = os.path.join(checkpoint_dir, "best_checkpoint.pytorch")
+        best_file_path = os.path.join(pytorch_dir, "best_checkpoint.pytorch")
         shutil.copyfile(last_file_path, best_file_path)
+        best_ckpt_path = os.path.join(ckpt_dir, "best_checkpoint.ckpt")
+        shutil.copyfile(last_ckpt_path, best_ckpt_path)
 
+    
 
 def load_checkpoint(
     checkpoint_path,
@@ -336,6 +349,15 @@ def load_checkpoint(
         raise IOError(f"Checkpoint '{checkpoint_path}' does not exist")
 
     state = torch.load(checkpoint_path, map_location="cpu")
+    # print("state", state)
+    # exclude_prefix="feat.PPmodel."
+    # model_state = state.get(model_key, {})
+    # filtered_state = {
+    #     k: v for k, v in model_state.items() if not k.startswith(exclude_prefix)
+    # }
+    # print("filtered_state", filtered_state)
+    # exit()
+    # model.load_state_dict(filtered_state, strict=False)
     model.load_state_dict(state[model_key])
 
     if optimizer is not None:

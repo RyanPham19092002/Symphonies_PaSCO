@@ -16,6 +16,7 @@ set_random_seed(42)
     "--config_path",
     default="semantic-kitti.yaml",
 )
+@click.option('--config_img_path', default="/media/anda/hdd3/Phat/PaSCo/cfg/pa_po_kitti_val.yaml")
 @click.option(
     "--dataset_preprocess_root",
     default="/lustre/fsn1/projects/rech/kvd/uyl37fq/pasco_preprocess/kitti",
@@ -28,6 +29,8 @@ set_random_seed(42)
 @click.option("--max_angle", default=30.0, help="")
 @click.option("--translate_distance", default=0.2, help="")
 @click.option("--n_workers_per_gpu", default=3, help="Number of workers per GPU")
+@click.option('--using_img', default=False)
+@click.option('--rgb_img', default="P2")
 def main(
     n_workers_per_gpu,
     n_gpus,
@@ -39,6 +42,9 @@ def main(
     dataset_root,
     dataset_preprocess_root,
     config_path,
+    config_img_path,
+    using_img,
+    rgb_img
 ):
 
     print("n_infers", n_infers)
@@ -52,8 +58,10 @@ def main(
         n_subnets=n_infers,
         translate_distance=translate_distance,
         max_angle=max_angle,
+        using_img=using_img,
+        rgb_img=rgb_img,
     )
-    data_module.setup_val_loader(visualize=False, max_items=None, data_aug=True)
+    data_module.setup_val_loader(visualize=False, max_items=None, data_aug=True)           #data_aug=True
 
     print(model_path)
 
@@ -67,7 +75,7 @@ def main(
     )
 
     model = Net.load_from_checkpoint(
-        model_path, class_frequencies=class_frequencies, iou_threshold=iou_threshold
+        model_path, class_frequencies=class_frequencies, iou_threshold=iou_threshold, cfg = config_img_path,strict=False
     )
     model.cuda()
     model.eval()

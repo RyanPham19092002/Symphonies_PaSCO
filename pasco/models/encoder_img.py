@@ -21,7 +21,7 @@
 # Please cite "4D Spatio-Temporal ConvNets: Minkowski Convolutional Neural
 # Networks", CVPR'19 (https://arxiv.org/abs/1904.08755) if you use any part
 # of the code.
-from time import time
+import time
 from pasco.models.metrics import SSCMetrics
 
 # Must be imported before large libs
@@ -102,11 +102,14 @@ class Encoder3DSepV2(nn.Module):
         use_se_layer=False,
     ):
         nn.Module.__init__(self)
-
         # Input sparse tensor must have tensor stride 128.
         enc_ch = f
-
+        # enc_ch = [x * 2 for x in f]
         self.enc_in_feats = ME.MinkowskiConvolution(
+            in_channels, enc_ch[0], kernel_size=1, stride=1, dimension=3
+        )
+
+        self.enc_img_feats = ME.MinkowskiConvolution(
             in_channels, enc_ch[0], kernel_size=1, stride=1, dimension=3
         )
 
@@ -114,13 +117,15 @@ class Encoder3DSepV2(nn.Module):
             drop_path_rates = [0.0] * 12
 
         if not heavy_decoder:
-            self.s1 = nn.Sequential(
+            
+            self.s1_img = nn.Sequential(
                 ResidualBlock(enc_ch[0], enc_ch[0]),
                 ResidualBlock(enc_ch[0], enc_ch[0]),
                 ResidualBlock(enc_ch[0], enc_ch[0]),
                 nn.Identity(),
             )
-            self.s1s2 = nn.Sequential(
+
+            self.s1s2_img = nn.Sequential(
                 BasicConvolutionBlock(enc_ch[0], enc_ch[1], ks=2, stride=2),
                 norm_layer(enc_ch[1]),
                 act_layer(),
@@ -129,8 +134,40 @@ class Encoder3DSepV2(nn.Module):
                 ResidualBlock(enc_ch[1], enc_ch[1]),
             )
 
-            self.s2s4 = nn.Sequential(
+            self.s2s4_img = nn.Sequential(
                 BasicConvolutionBlock(enc_ch[1], enc_ch[2], ks=2, stride=2),
+                norm_layer(enc_ch[2]),
+                act_layer(),
+                ResidualBlock(enc_ch[2], enc_ch[2]),
+                ResidualBlock(enc_ch[2], enc_ch[2]),
+                ResidualBlock(enc_ch[2], enc_ch[2]),
+            )
+            
+            self.s4s8_img = nn.Sequential(
+                BasicConvolutionBlock(enc_ch[2], enc_ch[3], ks=2, stride=2),
+                norm_layer(enc_ch[3]),
+                act_layer(),
+                ResidualBlock(enc_ch[3], enc_ch[3]),
+                ResidualBlock(enc_ch[3], enc_ch[3]),
+                ResidualBlock(enc_ch[3], enc_ch[3]),
+            )
+            self.s1 = nn.Sequential(
+                ResidualBlock(enc_ch[0], enc_ch[0]),
+                ResidualBlock(enc_ch[0], enc_ch[0]),
+                ResidualBlock(enc_ch[0], enc_ch[0]),
+                nn.Identity(),
+            )
+            self.s1s2 = nn.Sequential(
+                BasicConvolutionBlock(enc_ch[0]*2, enc_ch[1], ks=2, stride=2),
+                norm_layer(enc_ch[1]),
+                act_layer(),
+                ResidualBlock(enc_ch[1], enc_ch[1]),
+                ResidualBlock(enc_ch[1], enc_ch[1]),
+                ResidualBlock(enc_ch[1], enc_ch[1]),
+            )
+
+            self.s2s4 = nn.Sequential(
+                BasicConvolutionBlock(enc_ch[1]*2, enc_ch[2], ks=2, stride=2),
                 norm_layer(enc_ch[2]),
                 act_layer(),
                 ResidualBlock(enc_ch[2], enc_ch[2]),
@@ -139,12 +176,18 @@ class Encoder3DSepV2(nn.Module):
             )
 
             self.s4s8 = nn.Sequential(
-                BasicConvolutionBlock(enc_ch[2], enc_ch[3], ks=2, stride=2),
+                BasicConvolutionBlock(enc_ch[2]*2, enc_ch[3], ks=2, stride=2),
                 norm_layer(enc_ch[3]),
                 act_layer(),
                 ResidualBlock(enc_ch[3], enc_ch[3]),
                 ResidualBlock(enc_ch[3], enc_ch[3]),
                 ResidualBlock(enc_ch[3], enc_ch[3]),
+            )
+
+            self.final_s8 = nn.Sequential(
+                BasicConvolutionBlock(enc_ch[3]*2, enc_ch[3], ks=1, stride=1, dilation=1),
+                norm_layer(enc_ch[3]),
+                act_layer()
             )
         else:
             self.s1 = nn.Sequential(
@@ -171,13 +214,54 @@ class Encoder3DSepV2(nn.Module):
                 dropout_layer(p=dropouts[-1]),
             )
 
-    def forward(self, in_feats):
+    def forward(self, in_feats, img_feats):
+        # start_time = time.perf_counter()
         partial_in = self.enc_in_feats(in_feats)
+        # partial_in_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: enc_in_feats time: {partial_in_time - start_time:.4f} seconds")
+        partial_img = self.enc_img_feats(img_feats)
+        # partial_img_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: enc_img_feats time: {partial_img_time - partial_in_time:.4f} seconds")
+        # enc_partial_concate = ME.cat((partial_in, partial_img))
+        
+        enc_s1_fused = self.s1(partial_in)
+        # enc_s1_fused_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: s1 time: {enc_s1_fused_time - partial_img_time:.4f} seconds")
+        enc_img_s1 = self.s1_img(partial_img)    
+        # enc_img_s1_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: s1_img time: {enc_img_s1_time - enc_s1_fused_time:.4f} seconds")
+        enc_s1_concate = ME.cat((enc_s1_fused, enc_img_s1))
 
-        enc_s1 = self.s1(partial_in)    #N1x32
-        enc_s2 = self.s1s2(enc_s1)      #N2x64
-        enc_s4 = self.s2s4(enc_s2)      #N3x128
-        enc_s8 = self.s4s8(enc_s4)      #N4x128
-        features = [enc_s1, enc_s2, enc_s4, enc_s8]
+        enc_s2_fused = self.s1s2(enc_s1_concate)
+        # enc_s2_fused_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: s1s2 time: {enc_s2_fused_time - enc_img_s1_time:.4f} seconds")
+        enc_img_s2 = self.s1s2_img(enc_img_s1)
+        # enc_img_s2_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: s1s2_img time: {enc_img_s2_time - enc_s2_fused_time:.4f} seconds")
+        enc_s2_concate = ME.cat((enc_s2_fused, enc_img_s2))
+        # enc_s4 = self.s2s4(enc_s2)
+        enc_s4_fused = self.s2s4(enc_s2_concate)
+        # enc_s4_fused_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: s2s4 time: {enc_s4_fused_time - enc_img_s2_time:.4f} seconds")
+        enc_img_s4 = self.s2s4_img(enc_img_s2)
+        # enc_img_s4_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: s2s4_img time: {enc_img_s4_time - enc_s4_fused_time:.4f} seconds")
+        enc_s4_concate = ME.cat((enc_s4_fused, enc_img_s4))
+        # enc_s8 = self.s4s8(enc_s4)
+        enc_s8_fused = self.s4s8(enc_s4_concate)
+        # enc_s8_fused_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: s4s8 time: {enc_s8_fused_time - enc_img_s4_time:.4f} seconds")
+         # enc_img_s8 = self.s4s8_img(enc_img_s4)
+        enc_img_s8 = self.s4s8_img(enc_img_s4)
+        # enc_img_s8_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: s4s8_img time: {enc_img_s8_time - enc_s8_fused_time:.4f} seconds")
+        enc_s8_concate = ME.cat((enc_s8_fused, enc_img_s8))
 
-        return features
+        enc_s8_final = self.final_s8(enc_s8_concate)
+        # enc_s8_final_time = time.perf_counter()
+        # print(f"Encoder3DSepV2: final_s8 time: {enc_s8_final_time - enc_img_s8_time:.4f} seconds")
+        # print(f"Encoder3DSepV2: total time: {enc_s8_final_time - start_time:.4f} seconds")
+
+        features = [enc_s1_fused, enc_s2_fused, enc_s4_fused, enc_s8_final]
+
+        return features, enc_img_s8

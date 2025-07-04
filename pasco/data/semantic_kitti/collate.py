@@ -25,8 +25,13 @@ def collate_fn(batch, complete_scale):
     frame_ids = []
     sequences = []
     input_pcd_instance_labels = []
+    input_pcd_semantic_labels = []
     xyzs = []
-
+    cameras = []
+    ori_cameras = []
+    masks = []
+    pixel_coordinates = []
+    valid_masks = []
     scales = [1, 2, 4]
     for scale in scales:
         geo_labels["1_{}".format(scale)] = []
@@ -47,7 +52,13 @@ def collate_fn(batch, complete_scale):
         instance_label_origin = input_dict["instance_label_origin"]
         mask_label_origin = input_dict["mask_label_origin"]
         input_pcd_instance_label = input_dict["input_pcd_instance_label"]
-
+        input_pcd_semantic_label = input_dict["input_pcd_semantic_label"]
+        camera = input_dict["camera"]
+        ori_camera = input_dict["ori_camera"]
+        mask = input_dict["masks"]
+        pixel_coordinate = input_dict["pixel_coordinates"]
+        valid_mask = input_dict["valid_mask"]
+        
         for scale in scales:
             geo_labels["1_{}".format(scale)].append(
                 input_dict["geo_labels"]["1_{}".format(scale)]
@@ -70,8 +81,13 @@ def collate_fn(batch, complete_scale):
         min_Cs.append(min_C)
         max_Cs.append(max_C)
         input_pcd_instance_labels.append(input_pcd_instance_label)
+        input_pcd_semantic_labels.append(input_pcd_semantic_label)
         xyzs.append(input_dict["xyz"])
-
+        cameras.append(camera)
+        ori_cameras.append(ori_camera)
+        masks.append(mask)
+        pixel_coordinates.append(pixel_coordinate)
+        valid_masks.append(valid_mask)
     # The smaller scale is 8 so the dimension should divide 8
     global_min_Cs = torch.min(torch.stack(min_Cs), dim=0)[0]
     global_max_Cs = torch.max(torch.stack(max_Cs), dim=0)[0]
@@ -81,7 +97,12 @@ def collate_fn(batch, complete_scale):
     global_max_Cs = global_min_Cs + combine_scene_size - 1  # inclusive coords
     semantic_label_origin = torch.stack(semantic_label_origins)
     instance_label_origin = torch.stack(instance_label_origins)
-
+    # print("semantic_labels", semantic_labels[0].shape, semantic_labels[0].max())
+    # print("instance_labels", instance_labels[0].shape, instance_labels[0].max())
+    # print("semantic_label_origin", semantic_label_origin[0].shape, semantic_label_origin[0].max())
+    # print("instance_label_origin", instance_label_origin[0].shape, instance_label_origin[0].max())
+    # print("in_feats", in_feats[0].shape)
+    # exit()
     ret_data = {
         "frame_id": frame_ids,
         "xyz": xyzs,
@@ -97,11 +118,16 @@ def collate_fn(batch, complete_scale):
         "in_coords": in_coords,
         "in_feats": in_feats,
         "input_pcd_instance_label": input_pcd_instance_labels,
+        "input_pcd_semantic_label": input_pcd_semantic_labels,
         "Ts": Ts,
         "global_min_Cs": global_min_Cs,
         "global_max_Cs": global_max_Cs,
         "min_Cs": min_Cs,
         "max_Cs": max_Cs,
+        "camera": cameras,
+        "ori_camera": ori_cameras,
+        "masks": masks,
+        "pixel_coordinates": pixel_coordinates,
+        "valid_mask": valid_masks,
     }
-
     return ret_data

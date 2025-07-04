@@ -5,6 +5,57 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pasco.maskpls.interpolate import knn_up
 
+def conv3x1x3(inc, outc, kernel_size=(3, 1, 3), dilation=1, stride=1, D=3):
+    """
+    3x1x3 convolution with padding
+    """
+    return ME.MinkowskiConvolution(inc,
+                                   outc,
+                                   kernel_size=kernel_size,
+                                   dilation=dilation,
+                                   stride=stride,
+                                   dimension=D)
+def conv1x3x3(inc, outc, kernel_size=(1, 3, 3), dilation=1, stride=1, D=3):
+    """
+    1x3x3 convolution with padding
+    """
+    return ME.MinkowskiConvolution(inc,
+                                   outc,
+                                   kernel_size=kernel_size,
+                                   dilation=dilation,
+                                   stride=stride,
+                                   dimension=D)
+
+def conv3x1x1(inc, outc, kernel_size=(3, 1, 1), dilation=1, stride=1, D=3):
+    """
+    3x3x1 convolution with padding
+    """
+    return ME.MinkowskiConvolution(inc,
+                                   outc,
+                                   kernel_size=kernel_size,
+                                   dilation=dilation,
+                                   stride=stride,
+                                   dimension=D)
+def conv1x1x3(inc, outc, kernel_size=(1, 1, 3), dilation=1, stride=1, D=3):
+    """
+    1x1x3 convolution with padding
+    """
+    return ME.MinkowskiConvolution(inc,
+                                   outc,
+                                   kernel_size=kernel_size,
+                                   dilation=dilation,
+                                   stride=stride,
+                                   dimension=D)
+def conv1x3x1(inc, outc, kernel_size=(1, 3, 1), dilation=1, stride=1, D=3):
+    """
+    1x3x1 convolution with padding
+    """
+    return ME.MinkowskiConvolution(inc,
+                                   outc,
+                                   kernel_size=kernel_size,
+                                   dilation=dilation,
+                                   stride=stride,
+                                   dimension=D)
 
 
 
@@ -656,6 +707,63 @@ class ResidualBlock(nn.Module):
             y = self.se(y)
         out = self.relu(skip + y)
         return out
+
+# class AsymmetricalResidualBlock(nn.Module):
+#     def __init__(self, inc, outc, ks=3, stride=1, dilation=1, D=3, drop_path=0.):
+#         super().__init__()
+#         self.resblock = ResidualBlock(inc, outc, ks=ks, stride=stride, dilation=dilation, D=D, drop_path=drop_path)
+#         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+#         self.conv_1 = nn.Sequential (
+#             conv3x1x3(inc, outc, dilation=dilation, stride=stride, D=D),
+#             ME.MinkowskiBatchNorm(outc),
+#             ME.MinkowskiReLU(inplace=True),
+#             conv1x3x3(outc, outc, dilation=dilation, stride=stride, D=D),
+#             ME.MinkowskiBatchNorm(outc),
+#             ME.MinkowskiReLU(inplace=True),
+#         )
+#         self.conv_2 = nn.Sequential (
+#             conv1x3x3(inc, outc, dilation=dilation, stride=stride, D=D),
+#             ME.MinkowskiBatchNorm(outc),
+#             ME.MinkowskiReLU(inplace=True),
+#             conv3x1x3(outc, outc, dilation=dilation, stride=stride, D=D),
+#             ME.MinkowskiBatchNorm(outc),
+#             ME.MinkowskiReLU(inplace=True),
+#         )
+#         self.conv1x1x3 = nn.Sequential(
+#             conv1x1x3(outc, outc),
+#             ME.MinkowskiBatchNorm(outc),
+#             ME.MinkowskiSigmoid()
+#         )
+#         self.conv1x3x1 = nn.Sequential(
+#             conv1x3x1(outc, outc),
+#             ME.MinkowskiBatchNorm(outc),
+#             ME.MinkowskiSigmoid()
+#         )
+#         self.conv3x1x1 = nn.Sequential(
+#             conv3x1x1(outc, outc),
+#             ME.MinkowskiBatchNorm(outc),
+#             ME.MinkowskiSigmoid()
+#         )
+#         self.downsample = nn.Sequential() if (inc == outc and stride == 1) else \
+#             nn.Sequential(
+#                 ME.MinkowskiConvolution(inc, outc, kernel_size=1, dilation=1, stride=stride, dimension=D),
+#                 # ME.MinkowskiBatchNorm(outc)
+#             )
+
+#         self.relu_1 = ME.MinkowskiReLU(inplace=True)
+#         self.relu_2 = ME.MinkowskiReLU(inplace=True)
+
+
+#     def forward(self, x):
+#         x = self.resblock(x)
+#         y_1 = self.conv_1(x)
+#         y_2 = self.conv_2(x)
+#         y = self.relu_1(y_1 + y_2)
+#         y_branch1 = self.conv1x1x3(y)
+#         y_branch2 = self.conv1x3x1(y)
+#         y_branch3 = self.conv3x1x1(y)
+#         out = self.relu_2(y_branch1 + y_branch2 + y_branch3)
+#         return out
 
 if __name__ == "__main__":
     n_channels = [32, 32, 64, 128, 256, 256, 128, 96, 96]

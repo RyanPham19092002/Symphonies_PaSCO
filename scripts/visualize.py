@@ -115,7 +115,10 @@ def visualize_panoptic(pred_panoptic_seg, pred_segments_info, min_C, T,
    
     for seg in pred_segments_info:
         id = seg["id"]
+        print("id", id)
+        print("len pred_segments_info", len(pred_segments_info))
         mask = (from_feature == id).squeeze()
+        # print("len seg iss thing", len(seg['isthing']))
         if seg['isthing']:
             thing_id += 1
             thing_features.append(torch.full((from_feature[mask, :].shape[0],1), thing_id))
@@ -178,19 +181,20 @@ def majority_pooling(grid, k_size=2):
 
 
 @click.command()
+@click.option('--model_name', default="file_output_with_image_branch")
 @click.option('--start_frame_id', default=0)
-@click.option('--end_frame_id', default=4080)
-@click.option('--save_folder', default="output/images")
-@click.option('--draw_conf', default=True)
-@click.option('--draw_mask', default=True)
+@click.option('--end_frame_id', default=50)           #4080
+@click.option('--save_folder', default="output/default")
+@click.option('--draw_conf', default=False)
+@click.option('--draw_mask', default=False)
 @click.option('--is_draw_panoptic', default=True)
 @click.option('--is_draw_multi_scale_sem', default=True)
 @click.option('--is_draw_all_subnets', default=False)
 @click.option('--is_draw_input', default=True)
-def main(start_frame_id, end_frame_id, save_folder, 
+def main(model_name, start_frame_id, end_frame_id, save_folder, 
          draw_conf, draw_mask, is_draw_panoptic, is_draw_multi_scale_sem, is_draw_all_subnets, is_draw_input):   
      
-    model_names = ["pasco_single"]
+    model_names = [model_name]                    #change this to choose folder
     frame_ids = list(range(start_frame_id, end_frame_id, 5))
     
     

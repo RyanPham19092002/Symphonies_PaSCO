@@ -401,7 +401,29 @@ if __name__ == "__main__":
     pred_segments_info = data[
         "pred_segments_info"
     ]  # [{'id': 1, 'isthing': False, 'category_id': 9}, {'id': 2, 'isthing': True, 'category_id': 6}
-
+    thing_ids = [1,2,3,4,5,6,7,8]
+    class_names = [
+    "empty",  # 0
+    "car",  # 1
+    "bicycle",  # 2
+    "motorcycle",  # 3
+    "truck",  # 4
+    "other-vehicle",  # 5
+    "person",  # 6
+    "bicyclist",  # 7
+    "motorcyclist",  # 8
+    "road",  # 9
+    "parking",  # 10
+    "sidewalk",  # 11
+    "other-ground",  # 12
+    "building",  # 13
+    "fence",  # 14
+    "vegetation",  # 15
+    "trunk",  # 16
+    "terrain",  # 17
+    "pole",  # 18
+    "traffic-sign",  # 19
+]
     gt_panoptic_seg, gt_segments_info = convert_mask_label_to_panoptic_output(
         mask_label["labels"], mask_label["masks"], thing_ids
     )

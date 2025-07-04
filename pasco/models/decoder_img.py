@@ -41,7 +41,11 @@ from pasco.maskpls.mink import (
 )
 from collections import defaultdict
 from pasco.models.utils import batch_sparse_tensor
-from pasco.models.layer.pos_embed import LearnableSqueezePositionalEncoding #adding
+
+from pasco.models.layer.deformable_transformer import DeformableTransformerLayer
+from pasco.models.layer.pos_embed import LearnableSqueezePositionalEncoding
+from pasco.models.transformer.position_encoding import PositionEmbeddingSineSparse
+from pasco.utils.utils import (flatten_multi_scale_feats, get_level_start_index, index_fov_back_to_voxels, nlc_to_nchw)
 
 class TransformerInFeat(nn.Module):
 
@@ -293,7 +297,19 @@ class DecoderGenerativeSepConvV2(nn.Module):
         self.sigmoid_sparse = ME.MinkowskiSigmoid()
         self.threshold = 0
         self.n_classes = 20
-
+        #deformable attention after decoder 1:4
+        # self.pe_layer = PositionEmbeddingSineSparse(dec_ch[0], normalize=True)
+        self.deformable_cross_attn = DeformableTransformerLayer(
+            embed_dims=dec_ch[0],
+            num_heads=2,
+            num_levels=3,
+            num_points=4,
+        )
+        # self.scene_pos = [
+        #     LearnableSqueezePositionalEncoding((64, 64, 8), embed_dims=dec_ch[0], squeeze_dims=(1, 1, 1)),
+        #     LearnableSqueezePositionalEncoding((128, 128, 16), embed_dims=dec_ch[1], squeeze_dims=(1, 1, 1)),
+        #     LearnableSqueezePositionalEncoding((256, 256, 32), embed_dims=dec_ch[2], squeeze_dims=(1, 1, 1))
+        # ]
     def predict_completion(
         self, x, scale, occ_logits, scene_size, global_min_coords, geo_labels=None
     ):
@@ -400,7 +416,7 @@ class DecoderGenerativeSepConvV2(nn.Module):
 
         return keep
 
-    def predict_panop(self, xs, sem_logits_at_scales, Ts, min_Cs, max_Cs, sem_labels, query_intermediate):
+    def predict_panop(self, xs, sem_logits_at_scales, Ts, min_Cs, max_Cs, sem_labels, query_intermediate, multi_scale_image_features, scene_size_at_scales):
         panop_predictions = []
 
         xs_infers = defaultdict(list)
@@ -452,7 +468,7 @@ class DecoderGenerativeSepConvV2(nn.Module):
             + (batch_sem_logits_pruned[1] != 0).sum(-1)
         ) != 0
         panop_predictions = self.transformer_predictor(
-            xs_infers, batch_sem_logits_pruned, min_Cs, max_Cs, keep_pad, query_intermediate
+            xs_infers, batch_sem_logits_pruned, min_Cs, max_Cs, keep_pad, query_intermediate, multi_scale_image_features, scene_size_at_scales
         )
 
         return panop_predictions, sem_logits_pruneds
@@ -460,6 +476,8 @@ class DecoderGenerativeSepConvV2(nn.Module):
     def forward(
         self,
         x,
+        multi_scale_image_features,  # [sc4, sc2, sc1]
+        pixel_coordinates,  # [N, 2]
         features,
         query_intermediate,
         global_min_coords,
@@ -475,21 +493,44 @@ class DecoderGenerativeSepConvV2(nn.Module):
         """
         features: [enc_s1, enc_s2, enc_s4]
         """
-
-        features = features[::-1]               #feature: [sc4, sc2, sc1sc1]
+        
+        #pixel coordinate
+        pixel_coordinates = torch.from_numpy(pixel_coordinates.astype(np.float64)).to(x.device)
+        pixel_coordinates = (pixel_coordinates + 1 ) / 2 #[0, 1]
+        features = features[::-1]               #feature: [sc4, sc2, sc1]
         # print("features", np.array(features).shape)
         # occ_targets_at_scales = {}
         sem_logits_at_scales = {}
         xs = {}
+        scene_size_at_scales = {}
         for i in range(len(self.dec_blocks)):
             scale = 2 ** (len(self.dec_blocks) - 1 - i)
             x, sem_logits = self.dec_blocks[i](
                 x, features[i], global_min_coords, global_max_coords
             )
-
+            
             if scale in [4, 2, 1]:
 
                 scene_size = compute_scene_size(global_min_coords, global_max_coords)
+                # #Multi-scale image features
+                # scale_img_feature_14 = multi_scale_image_features[:1]
+                # multi_scale_img_feature_14_12 = multi_scale_image_features[:2]
+                
+                #Deformable cross-attention : voxel feature and multi-scale image features
+                
+                # if scale in [4]:
+                #     pe = x.C.reshape(-1, 4)
+                #     pe = self.pe_layer(pe[:, 1:])
+                #     pe = pe.reshape(1, -1, x.F[-1])
+                #     feat_flatten, shapes = flatten_multi_scale_feats(multi_scale_image_features)
+                    # x.F = self.deformable_cross_attn(
+                    #     x.F.unsqueeze(0),  # [bs, N, C]
+                    #     feat_flatten,  # [bs, N, C]
+                    #     query_pos = pe,
+                    #     ref_pts=pixel_coordinates.unsqueeze(0).unsqueeze(2).expand(-1, -1, len(multi_scale_image_features), -1),
+                    #     spatial_shapes=shapes,
+                    #     level_start_index=get_level_start_index(shapes)
+                    #     )
                 keep = self.predict_completion_sem_logit(
                     x,
                     scale,
@@ -501,12 +542,13 @@ class DecoderGenerativeSepConvV2(nn.Module):
                     sem_labels=sem_labels,
                     test=test,
                 )
-
                 x = self.pruning(x, keep)
                 sem_logits = [self.pruning(c, keep) for c in sem_logits]
 
                 xs[scale] = x
                 sem_logits_at_scales[scale] = sem_logits
+                scene_size_at_scales[scale] = (scene_size / scale).type(torch.int32)
+                
         # sem_logits_F, _ = sem_logits_at_scales
         # print("bs", sem_logits_F.shape[0])
         # exit()
@@ -516,7 +558,7 @@ class DecoderGenerativeSepConvV2(nn.Module):
         # print("Calculate Panoptic")
         if is_predict_panop:
             panop_predictions, sem_logits_pruneds = self.predict_panop(
-                xs, sem_logits_at_scales, Ts, min_Cs, max_Cs, sem_labels, query_intermediate
+                xs, sem_logits_at_scales, Ts, min_Cs, max_Cs, sem_labels, query_intermediate, multi_scale_image_features, scene_size_at_scales
             )
             ret["panop_predictions"] = panop_predictions
             ret["sem_logits_pruneds"] = sem_logits_pruneds

@@ -6,7 +6,9 @@ from torch import nn
 from pasco.models.transformer.position_encoding import PositionEmbeddingSineSparse
 import MinkowskiEngine as ME
 import pasco.models.transformer.blocks as blocks
-
+from pasco.models.image_branch.symphonies_decoder import SymphoniesLayer
+from pasco.models.layer.pos_embed import LearnableSqueezePositionalEncoding
+from pasco.utils.utils import cumprod, generate_grid, nchw_to_nlc, nlc_to_nchw
 
 class TransformerPredictorV2(nn.Module):
     def __init__(
@@ -93,9 +95,11 @@ class TransformerPredictorV2(nn.Module):
         self.query_embed = nn.Embedding(self.num_queries * n_infers, hidden_dim)
         self.input_projs = nn.ModuleList()
         self.max_pools = nn.ModuleDict()
+        self.image_proj = nn.ModuleList()       #adding
         for i in range(self.num_layers):
             scale = self.src_scales[i]
             self.input_projs.append(nn.Linear(in_channels[i], hidden_dim))
+            self.image_proj.append(nn.Linear(in_channels[0], hidden_dim))
             self.max_pools[str(scale)] = ME.MinkowskiMaxPooling(
                 kernel_size=scale, stride=scale, dimension=3
             )
@@ -107,15 +111,21 @@ class TransformerPredictorV2(nn.Module):
         self.mask_embed = blocks.MLP(hidden_dim, hidden_dim, hidden_dim, 3)
         self.mask_feat_proj = nn.Linear(mask_dim, hidden_dim)
 
-    def forward(self, xs, sem_logits, min_Cs, max_Cs, keep_pad, query_intermediate):
+        #learnable points embedded: #adding
+        self.pts_embed = nn.Embedding(num_queries * n_infers, 2)
+
+        #Symphonies Layer
+        self.symphonies_layer_1_4 = SymphoniesLayer(hidden_dim, num_levels=1,query_update=False)
+        self.symphonies_layer_1_2 = SymphoniesLayer(hidden_dim, num_levels=1,query_update=False)        #num_levels=2 (but not enough memory for 2 levels)
+        self.symphonies_layer_1_1 = SymphoniesLayer(hidden_dim, num_levels=1,query_update=False)        #num_levels=3 (but not enough memory for 3 levels)
+        self.symphonies_layer = [self.symphonies_layer_1_4, self.symphonies_layer_1_2, self.symphonies_layer_1_1]
+    def forward(self, xs, sem_logits, min_Cs, max_Cs, keep_pad, query_intermediate, multi_scale_image_features, scene_size_at_scales):
         """
         xs[scale] = (voxel_F, voxel_C)
         """
         sem_logits_F, sem_logits_C = sem_logits
         bs = sem_logits_F.shape[0]
-        # print("sem_logits_F", sem_logits_F)
-        # print("bs", bs)
-        # exit()
+
         assert self.n_infers == bs, "batch size should be equal to number of inference"
         #--------------------------modified query vector------------------
         #---Using center offset and hmap of CFFE as query vector------------
@@ -129,22 +139,43 @@ class TransformerPredictorV2(nn.Module):
             
         # #--------------------------------------------------------------------------------------
         # else:
-        output = self.query_feat.weight.reshape(bs, -1, self.hidden_dim)
+        '''
+        Scene positional encoding
+        '''
+        
+        pred_pts = self.pts_embed.weight.reshape(bs, -1, 2).sigmoid()  # (bs, N, 2) value [0, 1]  
+        
+        
+        output = self.query_feat.weight.reshape(bs, -1, self.hidden_dim)            
         query_embed = self.query_embed.weight.reshape(bs, -1, self.hidden_dim)
+        ref_2d_multi_scale = []   
         srcs = []
         src_Cs = []
         pos = []
+        scene_pos_at_scales = []
         for i in range(self.num_layers):
             scale = self.src_scales[i]
             # src = xs[scale]
             batch_F, batch_C = xs[scale]
+            
+            
+
             srcs.append(batch_F)
             src_Cs.append(batch_C)
+            
 
             pe = batch_C.reshape(-1, 4)
             pe = self.pe_layer(pe[:, 1:])
             pe = pe.reshape(bs, -1, self.hidden_dim)
-            pos.append(pe)  # (bs, N, hidden_dim)
+            pos.append(pe)  # pe shape [bs, N, hidden_dim]       #instances positional encoding
+
+            # scene_pos = LearnableSqueezePositionalEncoding(num_embeds = scene_size_at_scales[scale], embed_dims=self.hidden_dim, squeeze_dims=(1, 1, 1)) #adding
+            # vox_cord_normalized = ((batch_C[:, :, 1:] - min_Cs[0]) / scale).type(torch.int32) #adding
+            # scene_pos_at_scales.append(scene_pos(vox_cord_normalized[0]))   # [bs, N, self.hidden_dim]     #scene positional encoding
+            
+            # ref_2d = pred_pts.unsqueeze(2).expand(-1, -1, i+1, -1)  #[bs, N, level, 2]  for multi-scale each decoder block
+            ref_2d = pred_pts.unsqueeze(2).expand(-1, -1, 1, -1)    # [bs, N, 1, 2]  for 1 image each decoder block
+            ref_2d_multi_scale.append(ref_2d)
 
         predictions_class = []
         predictions_mask = []
@@ -156,11 +187,45 @@ class TransformerPredictorV2(nn.Module):
         outputs_class, outputs_mask = self.pred_heads(output, voxel_feat)
         predictions_class.append(outputs_class)
         predictions_mask.append(outputs_mask)
-        
-        for i in range(self.num_layers):
-            src_F = self.input_projs[i](srcs[i])
-            src_C = src_Cs[i]
 
+        multi_scale_image_fea = []
+        for i in range(self.num_layers):
+            scale = self.src_scales[i]
+            src_F = self.input_projs[i](srcs[i])            #scene embed fov
+            src_C = src_Cs[i]
+            #create the dense scene embed --------------------------------------------------
+            src_F_dense = torch.zeros(bs, cumprod(scene_size_at_scales[scale]), src_F.shape[-1], device=src_F.device)
+            grid_normalize = generate_grid(scene_size_at_scales[scale].cpu(), normalize=True).to(src_F.device)
+            voxel_grid_normalize = grid_normalize.permute(1,2,3,0).reshape(bs, cumprod(scene_size_at_scales[scale]), 3)   # [bs, N, 3]
+            src_C_dense =  torch.round(voxel_grid_normalize *  (scene_size_at_scales[scale]-1) * scale  + min_Cs[0])     # [bs, N, 3]
+            #Create a dict for searching indexes of src_C in src_C_dense
+            dense_coord_map = {tuple(coord.tolist()): i for i, coord in enumerate(src_C_dense[0])}  # {tuple(coord): index}
+            #Searching indexes of src_C in src_C_dense
+            src_C_indices = [dense_coord_map.get(tuple(coord.tolist()), -1) for coord in src_C[:, :, 1:][0]]  # [N]
+            src_C_indices = torch.tensor(src_C_indices, device=src_F.device)  # [N]
+            assert not torch.any(src_C_indices == -1), "Error: don't have at least voxel of src_C in src_C_dense"
+            assert len(src_C_indices) == src_F.shape[1], "src_C_indices and src_F should have the same length"
+            #Fill the src_F_dense with src_F at the corresponding indices
+            src_F_dense[0, src_C_indices] = src_F[0]    #[bs, X*Y*Z, C]
+            #query_img_cross_deformable_attn
+            h, w = multi_scale_image_features[i].shape[2:4]
+            image_fea = self.image_proj[i](multi_scale_image_features[i].permute(0,2,3,1).reshape(bs, h*w, -1)).reshape(bs, h, w, -1)
+            multi_scale_image_fea.append(image_fea.permute(0, 3, 1, 2))  # [bs, C, H, W] each scale
+            src_F, output = self.symphonies_layer[i](
+                # scene_embed_dense=nlc_to_nchw(src_F_dense, scene_size_at_scales[scale]),  
+                scene_embed_dense=src_F_dense,            #[bs, X*Y*Z, C]
+                scene_embed_fov = src_F,                #[bs, N, C]
+                inst_queries=output,
+                # feats=multi_scale_image_fea,
+                feats= [image_fea.permute(0, 3, 1, 2)],  # [[bs, C, H, W]]
+                scene_pos=pos[i],               #[bs, N, C]
+                inst_pos=query_embed,           #[bs, N, C]
+                ref_2d = ref_2d_multi_scale[i],
+                ref_vox = (((src_C[:, :, 1:]-min_Cs[0])//scale)/(scene_size_at_scales[scale]-1)).unsqueeze(2).float(),      #[1, N, 1, 3] 
+                # ref_vox = nchw_to_nlc(grid_normalize.unsqueeze(0)).unsqueeze(2),  # [1, N, 1, 3] 
+                scene_size = scene_size_at_scales[scale].reshape(bs, -1).type(torch.long)
+            )
+            #-------------------------------------------------------------
             attn_mask = self.compute_attn_mask(
                 outputs_mask,
                 voxel_coord,

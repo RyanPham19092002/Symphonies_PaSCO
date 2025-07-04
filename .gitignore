@@ -13,8 +13,17 @@ venv/
 # Jupyter notebook checkpoints
 .ipynb_checkpoints/
 
-
-
+*.pkl
+*eva*.txt
+*.sh
+*.png
+*.ckpt
+*.pt
+*.pth
+*time*.txt
+*environment.txt
+*environment.yaml
+.kitti/
 # IDEs
 # PyCharm
 .idea/
@@ -32,3 +41,16 @@ logs/
 output
 
 slurm
+3_frame.txt
+five_batch.txt
+mount_data
+one_batch.txt
+packages.txt
+ret_coor.txt
+gpfsdswork/semanticKITTI_full
+two_batch.txt
+pasco_preprocess/kitti/instance_labels_v2
+pasco_preprocess/kitti/waffleiron_v2
+pasco_preprocess/kitti/gt_modified/instance_labels_v2
+pasco_preprocess_not_use/kitti/waffleiron_v2
+pasco_preprocess_old/kitti

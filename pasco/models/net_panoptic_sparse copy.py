@@ -4,7 +4,7 @@ import torch
 from collections import defaultdict
 from pasco.models.metrics import SSCMetrics, UncertaintyMetrics
 
-from pasco.models.transformer.transformer_predictor_v2_img import (
+from pasco.models.transformer.transformer_predictor_v2 import (
     TransformerPredictorV2 as TransformerPredictor,
 )
 from pasco.loss.matcher_sparse import HungarianMatcher
@@ -20,7 +20,7 @@ from pasco.loss.panoptic_quality import (
 from pasco.data.semantic_kitti.params import thing_ids
 
 from pasco.models.unet3d_sparse_v2 import UNet3DV2, CylinderFeat
-from pasco.models.image_branch.cylinder_fea_generator import cylinder_fea 
+from pasco.models.image_branch.cylinder_fea_generator_mod import cylinder_fea 
 
 import MinkowskiEngine as ME
 from pasco.models.helper import panoptic_inference
@@ -39,9 +39,6 @@ from pasco.models.misc import compute_scene_size, prune_outside_coords
 import time
 import yaml
 
-from pasco.utils.measure_time import measure_time, measure_time_for_class
-
-# @measure_time_for_class
 class Net(pl.LightningModule):
     def __init__(
         self,
@@ -128,20 +125,8 @@ class Net(pl.LightningModule):
             query_sample_ratio=query_sample_ratio,
             in_channels=[f * 4, f * 2, f],
         )
-        print("self.using_img", self.using_img)
-        if self.using_img:
-            self.image_branch = cylinder_fea(                               #process image branch
-                self.image_cfg,           
-                grid_size=self.image_cfg['dataset']['grid_size'],
-                fea_dim=in_channels,
-                out_pt_fea_dim=f,
-                fea_compre=f,
-                nclasses=n_classes ,
-                use_sara=self.image_cfg['model']['use_sara'],
-                use_att=self.image_cfg['model']['use_att'] if 'use_att' in self.image_cfg['model'] else False)
-                # use_one_to_many_mapping=self.image_cfg['model']['OTM_transformer'])     
-        else:
-            self.feat = CylinderFeat(fea_dim=in_channels, out_pt_fea_dim=f)
+        
+
         self.unet3d = UNet3DV2(
             heavy_decoder=heavy_decoder,
             drop_path_rate=0.0,
@@ -187,7 +172,21 @@ class Net(pl.LightningModule):
             cost_dice=self.dice_weight,
         )
 
-        # self.feat = CylinderFeat(fea_dim=in_channels, out_pt_fea_dim=f)
+        if self.using_img:
+            self.image_branch = cylinder_fea(                               #process image branch
+                self.image_cfg,           
+                grid_size=self.image_cfg['dataset']['grid_size'],
+                fea_dim=in_channels,
+                out_pt_fea_dim=f,
+                fea_compre=32,
+                nclasses=n_classes ,
+                use_sara=self.image_cfg['model']['use_sara'],
+                use_att=self.image_cfg['model']['use_att'] if 'use_att' in self.image_cfg['model'] else False)      
+            
+        # else:
+            # print("in_channels", in_channels)
+            # print("f", f)
+        self.feat = CylinderFeat(fea_dim=in_channels, out_pt_fea_dim=f)
 
         self.criterion = SetCriterion(
             n_classes,
@@ -232,8 +231,6 @@ class Net(pl.LightningModule):
     def forward(
         self,
         in_feat,
-        multi_scale_img_feat,
-        pixel_coordinates,
         batch_size: int,
         sem_labels=None,
         global_min_coords=None,
@@ -263,8 +260,6 @@ class Net(pl.LightningModule):
         # exit()
         ret = self.unet3d(
             in_feat,
-            multi_scale_img_feat,
-            pixel_coordinates,
             batch_size,
             global_min_coords=global_min_coords,
             global_max_coords=global_max_coords,
@@ -362,7 +357,7 @@ class Net(pl.LightningModule):
             # return ssc_confidences, ensemble_sem_prob_denses    
 
         return ret
-    # @measure_time
+
     def step(self, batch, step_type):
         # print("step thực hiện trước")
         geo_labels = batch["geo_labels"]
@@ -371,26 +366,22 @@ class Net(pl.LightningModule):
         semantic_labels = batch["semantic_label"]  # [bs, 256, 256, 32]
         mask_labels = batch["mask_label"]
 
-        # in_coords, in_feats = self.feat(batch["in_feats"], batch["in_coords"])
+        
         
         if self.using_img:
-            # start_ussing_img = time.perf_counter()
-            in_coords, in_feats, multi_scale_img_feat, softmax_pix_logits, cam, label_no_zero_tensor = self.image_branch(pt_fea = batch["in_feats"], 
-                                                        xy_ind = batch["in_coords"],
-                                                        fusion_dict = batch)
-            # print("using img: ", time.perf_counter()-start_ussing_img)
+            print("Using Point-Img Fusion")
+            in_coords, in_feats,softmax_pix_logits, cam, label_no_zero_tensor = self.image_branch(pt_fea = batch["in_feats"], 
+                                                            xy_ind = batch["in_coords"],
+                                                            fusion_dict = batch)
         else:
             in_coords, in_feats = self.feat(batch["in_feats"], batch["in_coords"])
             softmax_pix_logits = None
             label_no_zero_tensor = None
             cam = None
+
         in_feat = ME.SparseTensor(in_feats, in_coords.int())
         in_feat = self.augmenter.merge(in_feat)
-        
-        # img_feat = ME.SparseTensor(img_feats, 
-        #     coordinate_map_key=in_feat.coordinate_map_key,
-        #     coordinate_manager=in_feat.coordinate_manager
-        #     )    #adding
+
         Ts = batch["Ts"]
 
         batch_size = 1
@@ -405,12 +396,8 @@ class Net(pl.LightningModule):
         is_predict_panop = True    # ori : True
         # if self.n_infers > 2 and self.current_epoch < self.pretrain_sem_epoch:        #ori have 2 lines
         #     is_predict_panop = False
-        mask = batch['masks'][0]
-        pixel_coordinates_valid = batch['pixel_coordinates'][0][mask]
         out = self(
             in_feat,
-            multi_scale_img_feat,
-            pixel_coordinates_valid,
             batch_size,
             sem_labels,
             global_min_coords=global_min_coords,
@@ -628,7 +615,7 @@ class Net(pl.LightningModule):
             "loss": total_loss,
             "panop_out_subnets": panop_out_subnets,
         }
-    # @measure_time
+
     def step_inference(
         self,
         batch,
@@ -638,24 +625,20 @@ class Net(pl.LightningModule):
         measure_time=False,
         draw=False,
     ):
-        # in_coords, in_feats = self.feat(batch["in_feats"], batch["in_coords"])
-        
-        # print("batch_feat", batch["in_feats"][0].shape, batch["in_coords"][0].shape)
         if self.using_img:
-            in_coords, in_feats, multi_scale_img_feat, _, _, _ = self.image_branch(pt_fea = batch["in_feats"], 
-            # in_coords, in_feats, _, _, _ = self.image_branch(pt_fea = batch["in_feats"], 
+            print("Using Point-Img Fusion")
+            in_coords, in_feats,softmax_pix_logits, cam, label_no_zero_tensor = self.image_branch(pt_fea = batch["in_feats"], 
                                                         xy_ind = batch["in_coords"],
                                                         fusion_dict = batch)
         else:
             in_coords, in_feats = self.feat(batch["in_feats"], batch["in_coords"])
-
+            softmax_pix_logits = None   
+            label_no_zero_tensor = None
+            cam = None
+        # print("batch_feat", batch["in_feats"][0].shape, batch["in_coords"][0].shape)
+        
         in_feat = ME.SparseTensor(in_feats, in_coords.int())
         in_feat = self.augmenter.merge(in_feat)
-
-        # img_feat = ME.SparseTensor(img_feats, 
-        #     coordinate_map_key=in_feat.coordinate_map_key,
-        #     coordinate_manager=in_feat.coordinate_manager
-        #     )     #adding
         Ts = batch["Ts"]
         min_Cs = batch["min_Cs"]
         max_Cs = batch["max_Cs"]
@@ -673,13 +656,9 @@ class Net(pl.LightningModule):
         # print("in_feats", in_feats.shape)
         # print("softmax_pix_logits", softmax_pix_logits.shape)
         # print("cam", cam.shape)
-        mask = batch['masks'][0]
-        pixel_coordinates_valid = batch['pixel_coordinates'][0][mask]
         ssc_confidences, sem_prob_denses, panop_prob_predictions = self(
         # ssc_confidences, sem_prob_denses = self(
             in_feat,
-            multi_scale_img_feat,
-            pixel_coordinates_valid,
             batch_size,
             geo_labels,
             global_min_coords=global_min_coords,

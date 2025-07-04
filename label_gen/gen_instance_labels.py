@@ -15,7 +15,7 @@ class DummyDataset(Dataset):
     def __init__(self, kitti_config, kitti_root, kitti_preprocess_root, frame_interval=5):
         self.preprocess_root = kitti_preprocess_root
         sequences = ["08", "00", "01", "02", "03", "04", "05", "06", "07", "09", "10"]
-        
+        # sequences = ["08", "09", "10"]
         self.label_paths = []
         self.scale = 1
         self.scene_size = (256//self.scale, 256//self.scale, 32//self.scale)
@@ -134,7 +134,7 @@ class DummyDataset(Dataset):
 
 @click.command()
 @click.option('--kitti_config', default="/gpfswork/rech/kvd/uyl37fq/code/uncertainty/uncertainty/data/semantic_kitti/semantic-kitti.yaml")
-@click.option('--kitti_root', default="/gpfsdswork/dataset/SemanticKITTI", help='Semantic kitti root')
+@click.option('--kitti_root', default="/media/anda/hdd31/Phat/PaSCo/gpfsdswork/semanticKITTI/dataset", help='Semantic kitti root')
 @click.option('--kitti_preprocess_root', default="/lustre/fsn1/projects/rech/kvd/uyl37fq/monoscene_preprocess/kitti", help='Semantic kitti root')
 @click.option('--n_process', default=10, help='number of parallel processes')
 def main(kitti_config, kitti_root, kitti_preprocess_root, n_process):

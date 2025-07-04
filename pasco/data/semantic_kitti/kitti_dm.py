@@ -23,6 +23,8 @@ class KittiDataModule(pl.LightningDataModule):
         n_subnets=1,
         complete_scale=8,
         frame_interval=5,
+        using_img=False,
+        rgb_img="P2",
     ):
         super().__init__()
         self.root = root
@@ -40,7 +42,9 @@ class KittiDataModule(pl.LightningDataModule):
         self.complete_scale = complete_scale
         self.val_aug = val_aug
         self.frame_interval = frame_interval
-
+        self.using_img = using_img
+        self.rgb_img = rgb_img
+        # print("batch", self.batch_size)
     def setup_val_loader_visualization(self, frame_ids, data_aug=True, max_items=None):
 
         self.val_ds = KittiDataset(
@@ -48,7 +52,7 @@ class KittiDataModule(pl.LightningDataModule):
             root=self.root,
             config_path=self.config_path,
             preprocess_root=self.preprocess_root,
-            data_aug=data_aug,
+            data_aug=self.data_aug,
             visualize=True,
             max_items=max_items,
             max_angle=self.max_angle,
@@ -59,6 +63,8 @@ class KittiDataModule(pl.LightningDataModule):
             complete_scale=self.complete_scale,
             frame_ids=frame_ids,
             frame_interval=self.frame_interval,
+            using_img=self.using_img,
+            rgb_img=self.rgb_img,
         )
 
     def setup_val_loader(self, visualize=False, max_items=None, data_aug=True):
@@ -77,6 +83,8 @@ class KittiDataModule(pl.LightningDataModule):
             n_fuse_scans=self.n_fuse_scans,
             n_subnets=self.n_subnets,
             complete_scale=self.complete_scale,
+            using_img=self.using_img,
+            rgb_img=self.rgb_img,
         )
 
     def setup_train_loader(self, visualize=False, max_items=None, data_aug=True):
@@ -95,6 +103,8 @@ class KittiDataModule(pl.LightningDataModule):
             n_fuse_scans=self.n_fuse_scans,
             n_subnets=self.n_subnets,
             complete_scale=self.complete_scale,
+            using_img=self.using_img,
+            rgb_img=self.rgb_img,
         )
 
     def setup(self, stage=None):
@@ -110,6 +120,8 @@ class KittiDataModule(pl.LightningDataModule):
             n_fuse_scans=self.n_fuse_scans,
             n_subnets=self.n_subnets,
             complete_scale=self.complete_scale,
+            using_img=self.using_img,
+            rgb_img=self.rgb_img,
         )
 
         self.val_ds = KittiDataset(
@@ -124,6 +136,8 @@ class KittiDataModule(pl.LightningDataModule):
             n_fuse_scans=self.n_fuse_scans,
             n_subnets=self.n_subnets,
             complete_scale=self.complete_scale,
+            using_img=self.using_img,
+            rgb_img=self.rgb_img,
         )
 
     def train_dataloader(self):
@@ -137,7 +151,7 @@ class KittiDataModule(pl.LightningDataModule):
             worker_init_fn=worker_init_fn,
             collate_fn=collate_fn_simple,
         )
-
+    
     def val_dataloader(self):
 
         return DataLoader(
@@ -154,7 +168,7 @@ class KittiDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(
             self.test_ds,
-            batch_size=self.batch_size,
+            batch_size=self.batch_sizes,
             drop_last=False,
             num_workers=self.num_workers,
             shuffle=False,

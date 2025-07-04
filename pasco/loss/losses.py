@@ -177,3 +177,22 @@ def compute_sem_compl_loss(
     ce_losses = torch.stack(ce_losses).mean()
     lovasz_losses = torch.stack(lovasz_losses).mean()
     return ce_losses, lovasz_losses
+
+class PixelLoss(torch.nn.Module):
+    def __init__(self, ignore_label = 255, save_loss = True):
+        super(PixelLoss, self).__init__()
+        self.CE_loss = torch.nn.CrossEntropyLoss(ignore_index=ignore_label)
+        self.ignore_label = ignore_label
+        # self.loss_dict={'pix_loss':[]}
+        self.save_loss = save_loss
+        
+    def forward(self, prediction, label):
+        device = torch.device('cuda')
+        prediction = prediction.to(torch.float32)
+        # print("prediction", prediction, prediction.shape)
+        # print("label", label, label.shape)
+        # print("label.squeeze(dim=1)", label.squeeze(dim=1), label.squeeze(dim=1).shape)
+        pix_sem_loss = self.CE_loss(prediction.to(device), label.squeeze(dim=1).type(torch.LongTensor).to(device) )
+        # if self.save_loss:
+        #     self.loss_dict['pix_loss'].append(torch.tensor(pix_sem_loss, device="cpu").item())
+        return pix_sem_loss

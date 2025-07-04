@@ -529,6 +529,7 @@ def draw_panoptic(
         vmax = 19
     elif dataset == "kitti360":
         vmax = 18
+    print("unique stuff", np.unique(stuff_labels))
     ssc_plot= mlab.points3d(stuff_points[:, 0], stuff_points[:, 1], stuff_points[:, 2], 
                             stuff_labels,
                             # colormap='afmhot', 
@@ -544,8 +545,8 @@ def draw_panoptic(
         thing_coords = thing_coords[mask]
         thing_labels = thing_labels[mask]   
         thing_points = thing_coords * voxel_size
-        
         # points = coords * voxel_size
+        print("unique things", np.unique(thing_labels))
         thing_plot= mlab.points3d(thing_points[:, 0], thing_points[:, 1], thing_points[:, 2], thing_labels,
                                 # colormap='gnuplot2', 
                                 scale_factor=0.95 * voxel_size, mode='cube', 

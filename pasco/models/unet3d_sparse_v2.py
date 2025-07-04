@@ -5,13 +5,18 @@ from pasco.models.transformer.position_encoding import PositionEmbeddingSineSpar
 from pasco.models.layers import SPCDense3Dv2
 import MinkowskiEngine as ME
 from pasco.models.dropout import MinkowskiSpatialDropout
-from pasco.models.decoder_v3 import DecoderGenerativeSepConvV2
+from pasco.models.decoder_img import DecoderGenerativeSepConvV2
+# from pasco.models.encoder_img import Encoder3DSepV2
+# from pasco.models.decoder_v3 import DecoderGenerativeSepConvV2
 from pasco.models.encoder_v2 import Encoder3DSepV2
 from pasco.models.misc import compute_scene_size
 import torch_scatter
 import torch.nn.functional as F
 
-
+from pasco.utils.measure_time import measure_time, measure_time_for_class
+# from pasco.models.deformable_att import MSDeformAttn
+from pasco.models.transformer.blocks import CrossAttentionLayer, SelfAttentionLayer
+# @measure_time_for_class
 class CylinderFeat(nn.Module):
 
     def __init__(
@@ -79,13 +84,27 @@ class CylinderFeat(nn.Module):
         pooled_data = torch_scatter.scatter_max(processed_cat_pt_fea, unq_inv, dim=0)[0]
 
         if self.fea_compre:
+            # print("fea_compre", self.fea_compre)
             processed_pooled_data = self.fea_compression(pooled_data)
         else:
+            # print("None")s
             processed_pooled_data = pooled_data
 
         return unq, processed_pooled_data
-
-
+    
+#offset predict branch
+class PredBranch(nn.Module):
+    def __init__(self, cin, cout):
+        super(PredBranch, self).__init__()
+        self.pred_layer = nn.Sequential(
+            nn.Dropout(p=0.2, inplace=False),
+            nn.Conv2d(cin, cout, kernel_size=1, stride=1, padding=0, dilation=1)
+        )
+    
+    def forward(self, x):
+        pred = self.pred_layer(x)
+        return pred
+# @measure_time_for_class
 class UNet3DV2(nn.Module):
 
     def __init__(
@@ -174,13 +193,36 @@ class UNet3DV2(nn.Module):
             self.decoder_generative
         )
 
-        conv_dim = 192
+        conv_dim = 192      #ori: 192
         N_steps = conv_dim // 3
         self.pe_layer = PositionEmbeddingSineSparse(N_steps, normalize=True)
-        self.sigmoid_sparse = ME.MinkowskiSigmoid()
+        # self.pe_layer_img = PositionEmbeddingSineSparse(N_steps, normalize=True)
 
+        # self.mask_dim = 128
+        # self.hidden_dim = 384
+        # self.mask_feat_proj = nn.Linear(self.mask_dim , self.hidden_dim )
+        # self.mask_feat_proj_img = nn.Linear(self.mask_dim, self.hidden_dim )
+
+        self.sigmoid_sparse = ME.MinkowskiSigmoid()
+        
+        #instance branch from CFNet 
+        # self.score_thresh = 0.22
+        # self.point_feat_out_channels = 32
+        # self.pred_layer_offset = PredBranch(self.point_feat_out_channels, 3)
+        # self.pred_layer_hmap = nn.Sequential(
+        #     PredBranch(self.point_feat_out_channels, 1),
+        #     nn.Sigmoid()
+        # )
+        # self.MSDeformAttn = MSDeformAttn()
+        # self.dense3d_img = nn.Sequential(
+        #     SPCDense3Dv2(init_size=dense_f),
+        #     dense_dropout_layer(dense3d_dropout),
+        # )
+        # self.CrossAttentionLayer = CrossAttentionLayer(d_model = 384, nhead = 4)
+        # self.SelfAttentionLayer = SelfAttentionLayer(d_model = 384, nhead = 4)
+        # self.to128 = nn.Linear(self.hidden_dim, self.mask_dim)
     def dense_bottleneck(
-        self, deepest_features, bs, global_min_coords, global_max_coords
+        self, deepest_features, bs, global_min_coords, global_max_coords,
     ):
         # l, bs, num_queries, dim
 
@@ -190,14 +232,17 @@ class UNet3DV2(nn.Module):
         scene_size = (
             compute_scene_size(global_min_coords, global_max_coords, scale) // scale
         )
+
         dense_shape = torch.Size(
             (bs, deepest_features.shape[1], scene_size[0], scene_size[1], scene_size[2])
         )
         deepest_features_dense = deepest_features.dense(
             dense_shape, min_coordinate=torch.IntTensor([*global_min_coords])
         )[0]
-
+        # if mode == "voxel":
         deepest_features_dense = self.dense3d(deepest_features_dense)
+        # else:       #mode = image
+        #     deepest_features_dense = self.dense3d_img(deepest_features_dense)
 
         deepest_features_t = ME.to_sparse(deepest_features_dense)
 
@@ -216,6 +261,8 @@ class UNet3DV2(nn.Module):
     def forward(
         self,
         in_feat,
+        multi_scale_img_feat,
+        pixel_coordinates,
         bs,
         Ts,
         global_min_coords,
@@ -236,12 +283,59 @@ class UNet3DV2(nn.Module):
             bs,
             global_min_coords=global_min_coords,
             global_max_coords=global_max_coords,
+            # mode="voxel",
         )
+        # deepest_img_features = self.dense_bottleneck(
+        #     img_features,
+        #     bs,
+        #     global_min_coords=global_min_coords,
+        #     global_max_coords=global_max_coords,
+        #     mode="image",
+        # )
+        # # position encoding voxel
+        # pe_voxel = deepest_features.C.reshape(-1, 4)
+        # pe_voxel = self.pe_layer(pe_voxel[:, 1:])
+        # pe_voxel = pe_voxel.reshape(-1, self.hidden_dim)
+        # deepest_features_coord = deepest_features.C
+        # deepest_features_feat = self.mask_feat_proj(deepest_features.F)
 
-        encoders_features = encoders_features[:-1]
+        # # position encoding img
+        # pe_img = deepest_img_features.C.reshape(-1, 4)
+        # pe_img = self.pe_layer_img(pe_img[:, 1:])
+        # pe_img = pe_img.reshape(-1, self.hidden_dim)
+        # deepest_img_features_coord = deepest_img_features.C
+        # deepest_img_features_feat = self.mask_feat_proj_img(deepest_img_features.F)
+        # # output = self.MSDeformAttn(query=deepest_features, value=deepest_img_features)
+        # crossAtt_dense = self.CrossAttentionLayer(
+        #     q_embed = deepest_features_feat, 
+        #     bb_feat = deepest_img_features_feat, 
+        #     pos = pe_img, 
+        #     query_pos = pe_voxel
+        # )
+        # selfAtt_dense = self.SelfAttentionLayer(crossAtt_dense)
+        # fused_feat = self.to128(selfAtt_dense)
+        # fused_feat = ME.SparseTensor(fused_feat, 
+        #     coordinate_map_key=deepest_features.coordinate_map_key,
+        #     coordinate_manager=deepest_features.coordinate_manager
+        #     ) 
+
+        encoders_features = encoders_features[:-1]          #[sc1, sc2, sc4]
+        
+        """
+        #pred center offset, choose scale 1_4 with channel 32:
+        # pred_offset = self.pred_layer_offset(encoders_features[-1]).float().squeeze(-1).transpose(1, 2).contiguous()
+        # pred_hmap = self.pred_layer_hmap(encoders_features[-1]).float().squeeze(1)
+        # # pred_offset_high_conf = pred_offset.detach() * (pred_hmap > self.score_thresh).float()  
+        # query_intermediate = [(pred_offset, pred_hmap)]
+        """
+        query_intermediate = None
         decoder_out = self.decoder_generative(
-            deepest_features,
+            deepest_features,           #original
+            # fused_feat,
+            multi_scale_img_feat,       #adding
+            pixel_coordinates,          #adding
             encoders_features,
+            query_intermediate,
             class_frequencies=class_frequencies,
             global_min_coords=global_min_coords,
             global_max_coords=global_max_coords,

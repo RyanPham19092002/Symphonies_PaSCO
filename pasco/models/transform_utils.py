@@ -57,7 +57,7 @@ def transform_xyz(points, T):
     return new_points
 
 
-def transform(coords, T, resolution=0.2):
+def transform(coords, T, resolution=0.2):                                       
     min_bound = torch.tensor([0, -25.6, -2]).reshape(1, 3).to(coords.device)
     max_bound = torch.tensor([51.2, 25.6, 4]).reshape(1, 3).to(coords.device)
     points = coords * resolution + resolution / 2

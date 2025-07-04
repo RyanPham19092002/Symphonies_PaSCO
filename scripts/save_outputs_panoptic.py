@@ -21,21 +21,25 @@ set_random_seed(42)
 @click.option('--translate_distance', default=0.2, help="")
 @click.option('--iou_threshold', default=0.1, help="") # visualize better with 0.1 value
 @click.option('--n_workers_per_gpu', default=3, help="Number of workers per GPU")
-@click.option('--dataset_root', default="/gpfsdswork/dataset/SemanticKITTI")
-@click.option('--dataset_preprocess_root', default="/lustre/fsn1/projects/rech/kvd/uyl37fq/monoscene_preprocess/kitti")
-@click.option('--config_path', default="semantic-kitti.yaml")
-@click.option('--model_path', default="ckpt/pasco_single.ckpt")
+@click.option('--dataset_root', default="/media/anda/hdd3/Phat/PaSCo/gpfsdswork/semanticKITTI_full")
+@click.option('--dataset_preprocess_root', default="/media/anda/hdd3/Phat/PaSCo/pasco_preprocess/kitti")
+@click.option('--config_path', default="/media/anda/hdd3/Phat/PaSCo/semantic-kitti.yaml")
+@click.option('--model_path', default="/media/anda/hdd3/Phat/PaSCo/logs/pasco_singlebs1_Fuse1_alpha0.0_wd0.0_lr0.0001_AugTrueR30.0T0.2S0.0_DropoutPoints0.05Trans0.2net3d0.0nLevels3_TransLay0Enc1Dec_queries100_maskWeight40.0_nInfers1_noHeavyDecoder/checkpoints/epoch=000-val_subnet1/pq_dagger_all=12.95338.ckpt")
+@click.option('--model_name', default="file_output_without_image_branch_1")
 @click.option('--frame_interval', default=5)
+@click.option('--using_img', default=False)
+@click.option('--rgb_img', default="P2")
 def main(
         dataset_root, config_path, dataset_preprocess_root,
         n_workers_per_gpu, 
         max_angle, translate_distance, iou_threshold,
         is_enable_dropout, n_infers,
-        frame_interval, model_path
+        frame_interval, model_path, model_name, using_img, rgb_img
 ):
     torch.set_grad_enabled(False)
-    
-    frame_ids = list(range(0, 4080, 5))
+    print(f"Model path: {model_path}")
+    print(f"Model name: {model_name}") 
+    frame_ids = list(range(0, 100, 5))              # ori 4080
     frame_ids = [int(frame_id) for frame_id in frame_ids]
 
     
@@ -49,7 +53,9 @@ def main(
         n_subnets=n_infers,
         translate_distance=translate_distance,
         max_angle=max_angle,
-        frame_interval=frame_interval
+        frame_interval=frame_interval,
+        using_img=using_img,
+        rgb_img=rgb_img,
     )
     
     data_module.setup_val_loader_visualization(frame_ids=frame_ids, 
@@ -58,7 +64,7 @@ def main(
     
 
 
-    model = Net.load_from_checkpoint(model_path, 
+    model = Net.load_from_checkpoint(model_path, cfg=config_path,
                                      class_frequencies=class_frequencies, iou_threshold=iou_threshold)
     model.cuda()
     model.eval()
@@ -121,7 +127,7 @@ def main(
                 "instance_label_origin": instance_label_origins.cpu().numpy(),
             }
             
-            model_name = "pasco_single"
+            # model_name = "file_output_without_image_branch_1"
             save_dir = os.path.join("output", model_name)
             os.makedirs(save_dir, exist_ok=True)
             filepath = os.path.join(save_dir, "{}_{}.pkl".format(frame_id, i_infer))
